@@ -9,12 +9,26 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <err.h>
+
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#include <sys/sensors.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <net/if.h>
 
 #include <X11/Xlib.h>
 
-char *tzargentina = "America/Buenos_Aires";
+char *tzest = "US/Eastern";
+char *tzpst = "US/Pacific";
 char *tzutc = "UTC";
-char *tzberlin = "Europe/Berlin";
+
+char *bat = "acpibat0";
+
+char *ifname = "iwn0";
 
 static Display *dpy;
 
@@ -92,14 +106,97 @@ loadavg(void)
 	return smprintf("%.2f %.2f %.2f", avgs[0], avgs[1], avgs[2]);
 }
 
+char *
+ipaddr(void)
+{
+	int fd, r;
+	struct ifreq ifr;
+	struct sockaddr_in* addr;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	ifr.ifr_addr.sa_family = AF_INET;
+	strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
+
+	r = ioctl(fd, SIOCGIFADDR, &ifr);
+	close(fd);
+
+	if (r == -1)
+		return smprintf("-");
+
+	addr = ((struct sockaddr_in*)&ifr.ifr_addr);
+	return smprintf("%s", inet_ntoa(addr->sin_addr));
+}
+
+char *
+batstat(void)
+{
+	int mib[5];
+	enum sensor_type rate_type;
+	int dev;
+	size_t len;
+	struct sensordev sd;
+	struct sensor sens;
+	int64_t full, rem, rate;
+
+	mib[0] = CTL_HW;
+	mib[1] = HW_SENSORS;
+	len = sizeof(sd);
+
+	for (dev = 0; ; dev++) {
+		mib[2] = dev;
+		if (sysctl(mib, 3, &sd, &len, NULL, 0) == -1)
+			err(1, "sysctl");
+		if (strcmp(sd.xname, bat) == 0)
+			break;
+	}
+	if (strcmp(sd.xname, bat) != 0)
+		return smprintf("bat:error");
+	len = sizeof(sens);
+	mib[4] = 0;
+
+	mib[3] = SENSOR_AMPHOUR;
+	rate_type = SENSOR_AMPS;
+	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
+		mib[3] = SENSOR_WATTHOUR;
+		rate_type = SENSOR_WATTS;
+	}
+
+
+	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
+		err(1, "sysctl");
+	if (strcmp(sens.desc, "last full capacity") != 0)
+		return smprintf("bat:expected full, got %s", sens.desc);
+	full = sens.value / 100;
+
+	mib[4] = 3;
+	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
+		err(1, "sysctl");
+	if (strcmp(sens.desc, "remaining capacity") != 0)
+		return smprintf("bat:expected rem, got %s", sens.desc);
+	rem = sens.value;
+
+	mib[3] = rate_type;
+	mib[4] = 0;
+	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
+		err(1, "sysctl");
+	if (strcmp(sens.desc, "rate") != 0)
+		return smprintf("bat:expected rate, got %s", sens.desc);
+	rate = sens.value;
+
+	return smprintf("%d%% %d:%02d", rem / full, rem / rate, (rem * 60 / rate) % 60);
+}
+
 int
 main(void)
 {
 	char *status;
 	char *avgs;
-	char *tmar;
+	char *bat;
+	char *addr;
+	char *tmpst;
 	char *tmutc;
-	char *tmbln;
+	char *tmest;
 
 	if (!(dpy = XOpenDisplay(NULL))) {
 		fprintf(stderr, "dwmstatus: cannot open display.\n");
@@ -108,17 +205,21 @@ main(void)
 
 	for (;;sleep(90)) {
 		avgs = loadavg();
-		tmar = mktimes("%H:%M", tzargentina);
+		bat = batstat();
+		addr = ipaddr();
+		tmpst = mktimes("%H:%M", tzpst);
 		tmutc = mktimes("%H:%M", tzutc);
-		tmbln = mktimes("KW %W %a %d %b %H:%M %Z %Y", tzberlin);
+		tmest = mktimes("%W %a %d %b %H:%M %Z %Y", tzest);
 
-		status = smprintf("L:%s A:%s U:%s %s",
-				avgs, tmar, tmutc, tmbln);
+		status = smprintf("%s B:%s L:%s P:%s U:%s  %s",
+				addr, bat, avgs, tmpst, tmutc, tmest);
 		setstatus(status);
 		free(avgs);
-		free(tmar);
+		free(bat);
+		free(addr);
+		free(tmpst);
 		free(tmutc);
-		free(tmbln);
+		free(tmest);
 		free(status);
 	}
 
