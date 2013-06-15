@@ -143,6 +143,7 @@ batstat(void)
 	mib[1] = HW_SENSORS;
 	len = sizeof(sd);
 
+	/* Find acpibat0 */
 	for (dev = 0; ; dev++) {
 		mib[2] = dev;
 		if (sysctl(mib, 3, &sd, &len, NULL, 0) == -1)
@@ -151,10 +152,13 @@ batstat(void)
 			break;
 	}
 	if (strcmp(sd.xname, bat) != 0)
-		return smprintf("bat:error");
+		return smprintf("no %s", bat);
+
+	/* Set up for reading sensor values */
 	len = sizeof(sens);
 	mib[4] = 0;
 
+	/* Check whether measurement is amps or watts */
 	mib[3] = SENSOR_AMPHOUR;
 	rate_type = SENSOR_AMPS;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
@@ -162,12 +166,11 @@ batstat(void)
 		rate_type = SENSOR_WATTS;
 	}
 
-
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
 		err(1, "sysctl");
 	if (strcmp(sens.desc, "last full capacity") != 0)
 		return smprintf("bat:expected full, got %s", sens.desc);
-	full = sens.value / 100;
+	full = sens.value;
 
 	mib[4] = 3;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
@@ -184,7 +187,24 @@ batstat(void)
 		return smprintf("bat:expected rate, got %s", sens.desc);
 	rate = sens.value;
 
-	return smprintf("%d%% %d:%02d", rem / full, rem / rate, (rem * 60 / rate) % 60);
+	mib[3] = SENSOR_INTEGER;
+	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
+		return smprintf("no status");
+	}
+
+	if (rate != 0) {
+		switch (sens.value) {
+		case 1: /* discharging */
+			return smprintf("%d%%- %d:%02d", rem / (full / 100), rem / rate, (rem * 60 / rate) % 60);
+		case 2: /* charging */
+			return smprintf("%d%%+ %d:%02d", rem / (full / 100), (full - rem) / rate, ((full - rem) * 60 / rate) % 60);
+		case 0: /* full/idle */
+			break;
+		default:
+			return smprintf("unknown status %d", sens.value);
+		}
+	}
+	return smprintf("%d%%", rem / (full / 100));
 }
 
 int
