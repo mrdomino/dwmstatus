@@ -111,7 +111,6 @@ ipaddr(void)
 {
 	int fd, r;
 	struct ifreq ifr;
-	struct sockaddr_in* addr;
 
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -124,8 +123,7 @@ ipaddr(void)
 	if (r == -1)
 		return smprintf("-");
 
-	addr = ((struct sockaddr_in*)&ifr.ifr_addr);
-	return smprintf("%s", inet_ntoa(addr->sin_addr));
+	return smprintf("%s", inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
 }
 
 char *
