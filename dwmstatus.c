@@ -9,9 +9,9 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <err.h>
+#include <signal.h>
+#include <pthread.h>
 
-#include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/sensors.h>
 #include <sys/ioctl.h>
@@ -31,6 +31,8 @@ char *bat = "acpibat0";
 char *ifname = "iwn0";
 
 static Display *dpy;
+
+static pthread_mutex_t g_mtx;
 
 char *
 smprintf(char *fmt, ...)
@@ -145,7 +147,7 @@ batstat(void)
 	for (dev = 0; ; dev++) {
 		mib[2] = dev;
 		if (sysctl(mib, 3, &sd, &len, NULL, 0) == -1)
-			err(1, "sysctl");
+			perror("sysctl");
 		if (strcmp(sd.xname, bat) == 0)
 			break;
 	}
@@ -165,14 +167,14 @@ batstat(void)
 	}
 
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		err(1, "sysctl");
+		perror("sysctl");
 	if (strcmp(sens.desc, "last full capacity") != 0)
 		return smprintf("bat:expected full, got %s", sens.desc);
 	full = sens.value;
 
 	mib[4] = 3;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		err(1, "sysctl");
+		perror("sysctl");
 	if (strcmp(sens.desc, "remaining capacity") != 0)
 		return smprintf("bat:expected rem, got %s", sens.desc);
 	rem = sens.value;
@@ -180,7 +182,7 @@ batstat(void)
 	mib[3] = rate_type;
 	mib[4] = 0;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		err(1, "sysctl");
+		perror("sysctl");
 	if (strcmp(sens.desc, "rate") != 0)
 		return smprintf("bat:expected rate, got %s", sens.desc);
 	rate = sens.value;
@@ -205,43 +207,69 @@ batstat(void)
 	return smprintf("%d%%", rem / (full / 100));
 }
 
-int
-main(void)
+void
+update_status(void)
 {
-	char *status;
 	char *avgs;
 	char *bat;
 	char *addr;
 	char *tmpst;
 	char *tmutc;
 	char *tmest;
+	char *status;
 
+	avgs = loadavg();
+	bat = batstat();
+	addr = ipaddr();
+	tmpst = mktimes("%H:%M", tzpst);
+	tmutc = mktimes("%H:%M", tzutc);
+	tmest = mktimes("%W %a %d %b %H:%M %Z %Y", tzest);
+
+	status = smprintf("%s B:%s L:%s P:%s U:%s  %s",
+			addr, bat, avgs, tmpst, tmutc, tmest);
+	setstatus(status);
+	free(avgs);
+	free(bat);
+	free(addr);
+	free(tmpst);
+	free(tmutc);
+	free(tmest);
+	free(status);
+}
+
+void
+sighup(int sig)
+{
+	fprintf(stderr, "dwmstatus: got SIGHUP.\n");
+	if (pthread_mutex_trylock(&g_mtx) == 0) {
+		update_status();
+		pthread_mutex_unlock(&g_mtx);
+	}
+}
+
+int
+main(void)
+{
 	if (!(dpy = XOpenDisplay(NULL))) {
 		fprintf(stderr, "dwmstatus: cannot open display.\n");
 		return 1;
 	}
+	if (pthread_mutex_init(&g_mtx, NULL) != 0) {
+		XCloseDisplay(dpy);
+		return 2;
+	}
+
+	signal(SIGHUP, sighup);
 
 	for (;;sleep(90)) {
-		avgs = loadavg();
-		bat = batstat();
-		addr = ipaddr();
-		tmpst = mktimes("%H:%M", tzpst);
-		tmutc = mktimes("%H:%M", tzutc);
-		tmest = mktimes("%W %a %d %b %H:%M %Z %Y", tzest);
-
-		status = smprintf("%s B:%s L:%s P:%s U:%s  %s",
-				addr, bat, avgs, tmpst, tmutc, tmest);
-		setstatus(status);
-		free(avgs);
-		free(bat);
-		free(addr);
-		free(tmpst);
-		free(tmutc);
-		free(tmest);
-		free(status);
+		if (pthread_mutex_trylock(&g_mtx) == 0) {
+			update_status();
+			pthread_mutex_unlock(&g_mtx);
+		}
 	}
 
 	XCloseDisplay(dpy);
+	pthread_mutex_destroy(&g_mtx);
 
 	return 0;
 }
