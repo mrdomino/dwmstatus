@@ -34,6 +34,14 @@ static Display *dpy;
 
 static pthread_mutex_t g_mtx;
 
+static int g_dev = -1;
+
+/*
+ * from acpidev.h
+ */
+#define BST_DISCHARGE 0x01
+#define BST_CHARGE 0x02
+
 char *
 smprintf(char *fmt, ...)
 {
@@ -128,22 +136,17 @@ ipaddr(void)
 	return smprintf("%s", inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
 }
 
-char *
-batstat(void)
+int
+findbat(void)
 {
-	int mib[5];
-	enum sensor_type rate_type;
-	int dev;
-	size_t len;
+	int mib[3];
 	struct sensordev sd;
-	struct sensor sens;
-	int64_t full, rem, rate;
+	size_t len = sizeof(sd);
+	int dev;
 
 	mib[0] = CTL_HW;
 	mib[1] = HW_SENSORS;
-	len = sizeof(sd);
 
-	/* Find acpibat0 */
 	for (dev = 0; ; dev++) {
 		mib[2] = dev;
 		if (sysctl(mib, 3, &sd, &len, NULL, 0) == -1)
@@ -152,10 +155,25 @@ batstat(void)
 			break;
 	}
 	if (strcmp(sd.xname, bat) != 0)
-		return smprintf("no %s", bat);
+		return -1;
+	return dev;
+}
 
-	/* Set up for reading sensor values */
-	len = sizeof(sens);
+char *
+batstat(void)
+{
+	int mib[5];
+	enum sensor_type rate_type;
+	struct sensor sens;
+	size_t len = sizeof(sens);
+	int64_t full, rem, rate;
+
+	if (g_dev < 0)
+		g_dev = findbat();
+
+	mib[0] = CTL_HW;
+	mib[1] = HW_SENSORS;
+	mib[2] = g_dev;
 	mib[4] = 0;
 
 	/* Check whether measurement is amps or watts */
@@ -169,14 +187,14 @@ batstat(void)
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
 		perror("sysctl");
 	if (strcmp(sens.desc, "last full capacity") != 0)
-		return smprintf("bat:expected full, got %s", sens.desc);
+		return smprintf("expected full, got %s", sens.desc);
 	full = sens.value;
 
 	mib[4] = 3;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
 		perror("sysctl");
 	if (strcmp(sens.desc, "remaining capacity") != 0)
-		return smprintf("bat:expected rem, got %s", sens.desc);
+		return smprintf("expected rem, got %s", sens.desc);
 	rem = sens.value;
 
 	mib[3] = rate_type;
@@ -184,27 +202,27 @@ batstat(void)
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
 		perror("sysctl");
 	if (strcmp(sens.desc, "rate") != 0)
-		return smprintf("bat:expected rate, got %s", sens.desc);
+		return smprintf("expected rate, got %s", sens.desc);
 	rate = sens.value;
 
+	/* get status */
 	mib[3] = SENSOR_INTEGER;
 	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
 		return smprintf("no status");
 	}
 
-	if (rate != 0) {
-		switch (sens.value) {
-		case 1: /* discharging */
-			return smprintf("%d%%- %d:%02d", rem / (full / 100), rem / rate, (rem * 60 / rate) % 60);
-		case 2: /* charging */
-			return smprintf("%d%%+ %d:%02d", rem / (full / 100), (full - rem) / rate, ((full - rem) * 60 / rate) % 60);
-		case 0: /* full/idle */
-			break;
-		default:
-			return smprintf("unknown status %d", sens.value);
-		}
+	if (rate == 0 || sens.value == 0) {
+		return smprintf("%d%%", rem / (full / 100));
+	} else if (sens.value & BST_DISCHARGE) {
+		return smprintf("%d%%- %d:%02d", rem / (full / 100),
+		                rem / rate, (rem * 60 / rate) % 60);
+	} else if (sens.value & BST_CHARGE) {
+		return smprintf("%d%%+ %d:%02d", rem / (full / 100),
+		                (full - rem) / rate,
+		                ((full - rem) * 60 / rate) % 60);
+	} else {
+		return smprintf("unknown status %x", sens.value);
 	}
-	return smprintf("%d%%", rem / (full / 100));
 }
 
 void
