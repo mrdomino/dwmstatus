@@ -22,13 +22,21 @@
 
 #include <X11/Xlib.h>
 
-char *tzest = "US/Eastern";
-char *tzpst = "US/Pacific";
-char *tzutc = "UTC";
+struct TzStatus {
+	char c;
+	char *v;
+};
 
-char *bat = "acpibat0";
+static const struct TzStatus tzs[] = {
+	{ .c = 'U', .v = "UTC" },
+	{ .c = 'E', .v = "US/Eastern" },
+};
 
-char *ifname = "iwn0";
+static const char *tzmain = "US/Pacific";
+
+static const char *bat = "acpibat0";
+
+static const char *ifname = "em0";
 
 static Display *dpy;
 
@@ -67,13 +75,13 @@ smprintf(char *fmt, ...)
 }
 
 void
-settz(char *tzname)
+settz(const char *tzname)
 {
 	setenv("TZ", tzname, 1);
 }
 
 char *
-mktimes(char *fmt, char *tzname)
+mktimes(const char *fmt, const char *tzname)
 {
 	char buf[129];
 	time_t tim;
@@ -231,27 +239,32 @@ update_status(void)
 	char *avgs;
 	char *bat;
 	char *addr;
-	char *tmpst;
-	char *tmutc;
-	char *tmest;
 	char *status;
+	char *newstatus;
+	char *tm;
+	int i;
 
 	avgs = loadavg();
 	bat = batstat();
 	addr = ipaddr();
-	tmpst = mktimes("%H:%M", tzpst);
-	tmutc = mktimes("%H:%M", tzutc);
-	tmest = mktimes("%W %a %d %b %H:%M %Z %Y", tzest);
+	status = smprintf("%s B:%s L:%s", addr, bat, avgs);
+	for (i = 0; i < sizeof tzs / sizeof *tzs; i++) {
+		tm = mktimes("%H:%M", tzs[i].v);
+		newstatus = smprintf("%s %c:%s", status, tzs[i].c, tm);
+		free(status);
+		free(tm);
+		status = newstatus;
+	}
+	tm = mktimes("%W %a %d %b %H:%M %Z %Y", tzmain);
+	newstatus = smprintf("%s  %s", status, tm);
+	free(status);
+	free(tm);
+	status = newstatus;
 
-	status = smprintf("%s B:%s L:%s P:%s U:%s  %s",
-			addr, bat, avgs, tmpst, tmutc, tmest);
 	setstatus(status);
 	free(avgs);
 	free(bat);
 	free(addr);
-	free(tmpst);
-	free(tmutc);
-	free(tmest);
 	free(status);
 }
 
