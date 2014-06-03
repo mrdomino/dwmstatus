@@ -36,7 +36,9 @@ static const char *tzmain = "US/Pacific";
 
 static const char *bat = "acpibat0";
 
-static const char *ifname = "em0";
+static const char *ifnames[] = {
+	"em0", "iwn0"
+};
 
 static Display *dpy;
 
@@ -127,21 +129,27 @@ loadavg(void)
 char *
 ipaddr(void)
 {
-	int fd, r;
+	int fd, r, i;
+	char *ifname;
 	struct ifreq ifr;
 
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-
 	ifr.ifr_addr.sa_family = AF_INET;
-	strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
 
-	r = ioctl(fd, SIOCGIFADDR, &ifr);
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	for (i = 0; i < sizeof ifnames / sizeof *ifnames; i++) {
+		ifname = ifnames[i];
+		strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
+		r = ioctl(fd, SIOCGIFADDR, &ifr);
+		if (r == -1) {
+			continue;
+		}
+	}
 	close(fd);
-
-	if (r == -1)
+	if (r == -1) {
 		return smprintf("-");
-
-	return smprintf("%s", inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
+	} else {
+		return smprintf("%s:%s", ifname, inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
+	}
 }
 
 int
