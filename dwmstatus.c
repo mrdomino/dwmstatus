@@ -251,6 +251,10 @@ update_status(void)
 	char *tm;
 	int i;
 
+	if (pthread_mutex_trylock(&g_mtx) != 0) {
+		return;
+	}
+
 	avgs = loadavg();
 	bat = batstat();
 	addr = ipaddr();
@@ -269,6 +273,8 @@ update_status(void)
 	status = newstatus;
 
 	setstatus(status);
+
+	pthread_mutex_unlock(&g_mtx);
 	free(avgs);
 	free(bat);
 	free(addr);
@@ -279,10 +285,7 @@ void
 sighup(int sig)
 {
 	fprintf(stderr, "dwmstatus: got SIGHUP.\n");
-	if (pthread_mutex_trylock(&g_mtx) == 0) {
-		update_status();
-		pthread_mutex_unlock(&g_mtx);
-	}
+	update_status();
 }
 
 int
@@ -300,11 +303,10 @@ main(void)
 	signal(SIGHUP, sighup);
 
 	for (;;sleep(90)) {
-		if (pthread_mutex_trylock(&g_mtx) == 0) {
-			update_status();
-			pthread_mutex_unlock(&g_mtx);
-		}
+		update_status();
 	}
+
+	signal(SIGHUP, SIG_DFL);
 
 	XCloseDisplay(dpy);
 	pthread_mutex_destroy(&g_mtx);
