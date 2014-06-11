@@ -127,7 +127,7 @@ char *
 ipaddr(void)
 {
 	int fd, r, i;
-	char *ifname;
+	const char *ifname;
 	struct ifreq ifr;
 
 	ifr.ifr_addr.sa_family = AF_INET;
