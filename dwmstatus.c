@@ -224,7 +224,9 @@ batstat(void)
 		return smprintf("no status");
 	}
 
-	if (rate == 0 || sens.value == 0) {
+	if (full == 0) {
+		return smprintf("-");
+	} else if (rate == 0 || sens.value == 0) {
 		return smprintf("%d%%", rem / (full / 100));
 	} else if (sens.value & BST_DISCHARGE) {
 		return smprintf("%d%%- %d:%02d", rem / (full / 100),
