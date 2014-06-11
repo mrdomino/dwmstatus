@@ -1,4 +1,5 @@
 #define _BSD_SOURCE
+#include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -284,8 +285,11 @@ update_status(void)
 void
 sighup(int sig)
 {
+	int save_errno = errno;
+
 	fprintf(stderr, "dwmstatus: got SIGHUP.\n");
 	update_status();
+	errno = save_errno;
 }
 
 int
