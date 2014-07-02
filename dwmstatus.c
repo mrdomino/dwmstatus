@@ -133,13 +133,16 @@ ipaddr(void)
 
 	ifr.ifr_addr.sa_family = AF_INET;
 
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (-1 == (fd = socket(AF_INET, SOCK_DGRAM, 0))) {
+		perror("socket");
+		return smprintf("-");
+	}
 	for (i = 0; i < sizeof ifnames / sizeof *ifnames; i++) {
 		ifname = ifnames[i];
 		strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
 		r = ioctl(fd, SIOCGIFADDR, &ifr);
-		if (r == -1) {
-			continue;
+		if (r == 0) {
+			break;
 		}
 	}
 	close(fd);
