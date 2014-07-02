@@ -1,23 +1,15 @@
 #define _BSD_SOURCE
+#include <assert.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/time.h>
-#include <time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include <bsd/string.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <pthread.h>
-
-#include <sys/sysctl.h>
-#include <sys/sensors.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 
@@ -33,22 +25,15 @@ static const struct TzStatus tzs[] = {
 	{ .c = 'U', .v = "UTC" },
 	{ .c = 'E', .v = "US/Eastern" },
 };
-static const char *tzmain = "US/Pacific";
-static const char *bat = "acpibat0";
-static const char *ifnames[] = { "em0", "iwn0" };
+static const char *tzmain = "US/Pacific-New";
+static const char *batbase = "/sys/class/power_supply/BAT0";
+static const char *ifnames[] = { "wire0", "radi0" };
 
 
 static Display *dpy;
 
 static pthread_mutex_t g_mtx;
 
-static int g_dev = -1;
-
-/*
- * from acpidev.h
- */
-#define BST_DISCHARGE 0x01
-#define BST_CHARGE 0x02
 
 char *
 smprintf(char *fmt, ...)
@@ -153,95 +138,75 @@ ipaddr(void)
 	}
 }
 
-int
-findbat(void)
+char *
+readfile(const char *base, const char *file)
 {
-	int mib[3];
-	struct sensordev sd;
-	size_t len = sizeof(sd);
-	int dev;
+	char buf[2048];
+	int fd;
+	int r;
 
-	mib[0] = CTL_HW;
-	mib[1] = HW_SENSORS;
-
-	for (dev = 0; ; dev++) {
-		mib[2] = dev;
-		if (sysctl(mib, 3, &sd, &len, NULL, 0) == -1)
-			perror("sysctl");
-		if (strcmp(sd.xname, bat) == 0)
-			break;
+	r = snprintf(buf, 2048, "%s/%s", base, file);
+	if (r >= 2048) {
+		return 0;
 	}
-	if (strcmp(sd.xname, bat) != 0)
-		return -1;
-	return dev;
+	if (-1 == (fd = open(buf, O_RDONLY))) {
+		return 0;
+	}
+	if (-1 == (r = read(fd, buf, 2047))) {
+		perror("read");
+		r = close(fd);
+		assert(r == 0);
+		return 0;
+	}
+	assert(r < 2048);
+	buf[r] = 0;
+
+	r = close(fd);
+	assert(r == 0);
+
+	return strdup(buf);
 }
 
 char *
-batstat(void)
+getbattery(const char *base)
 {
-	int mib[5];
-	enum sensor_type rate_type;
-	struct sensor sens;
-	size_t len = sizeof(sens);
-	int64_t full, rem, rate;
+	char *co;
+	int descap, remcap;
 
-	if (g_dev < 0)
-		g_dev = findbat();
+	descap = -1;
+	remcap = -1;
 
-	mib[0] = CTL_HW;
-	mib[1] = HW_SENSORS;
-	mib[2] = g_dev;
-	mib[4] = 0;
-
-	/* Check whether measurement is amps or watts */
-	mib[3] = SENSOR_AMPHOUR;
-	rate_type = SENSOR_AMPS;
-	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
-		mib[3] = SENSOR_WATTHOUR;
-		rate_type = SENSOR_WATTS;
+	co = readfile(base, "present");
+	if (co == NULL || co[0] != '1') {
+		free(co);
+		return smprintf("not present");
 	}
+	free(co);
 
-	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		perror("sysctl");
-	if (strcmp(sens.desc, "last full capacity") != 0)
-		return smprintf("expected full, got %s", sens.desc);
-	full = sens.value;
-
-	mib[4] = 3;
-	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		perror("sysctl");
-	if (strcmp(sens.desc, "remaining capacity") != 0)
-		return smprintf("expected rem, got %s", sens.desc);
-	rem = sens.value;
-
-	mib[3] = rate_type;
-	mib[4] = 0;
-	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1)
-		perror("sysctl");
-	if (strcmp(sens.desc, "rate") != 0)
-		return smprintf("expected rate, got %s", sens.desc);
-	rate = sens.value;
-
-	/* get status */
-	mib[3] = SENSOR_INTEGER;
-	if (sysctl(mib, 5, &sens, &len, NULL, 0) == -1) {
-		return smprintf("no status");
+	co = readfile(base, "charge_full_design");
+	if (co == NULL) {
+		co = readfile(base, "energy_full_design");
+		if (co == NULL) {
+			return smprintf("");
+		}
 	}
+	sscanf(co, "%d", &descap);
+	free(co);
 
-	if (full == 0) {
-		return smprintf("-");
-	} else if (rate == 0 || sens.value == 0) {
-		return smprintf("%d%%", rem / (full / 100));
-	} else if (sens.value & BST_DISCHARGE) {
-		return smprintf("%d%%- %d:%02d", rem / (full / 100),
-		                rem / rate, (rem * 60 / rate) % 60);
-	} else if (sens.value & BST_CHARGE) {
-		return smprintf("%d%%+ %d:%02d", rem / (full / 100),
-		                (full - rem) / rate,
-		                ((full - rem) * 60 / rate) % 60);
-	} else {
-		return smprintf("unknown status %x", sens.value);
+	co = readfile(base, "charge_now");
+	if (co == NULL) {
+		co = readfile(base, "energy_now");
+		if (co == NULL) {
+			return smprintf("");
+		}
 	}
+	sscanf(co, "%d", &remcap);
+	free(co);
+
+	if (remcap < 0 || descap < 0) {
+		return smprintf("invalid");
+	}
+	return smprintf("%.0f", (float)remcap / descap * 100.0);
 }
 
 void
@@ -260,7 +225,7 @@ update_status(void)
 	}
 
 	avgs = loadavg();
-	bat = batstat();
+	bat = getbattery(batbase);
 	addr = ipaddr();
 	status = smprintf("%s B:%s L:%s", addr, bat, avgs);
 	for (i = 0; i < sizeof tzs / sizeof *tzs; i++) {
