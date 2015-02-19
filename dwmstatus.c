@@ -36,6 +36,7 @@ static const struct TzStatus tzs[] = {
 static const char *tzmain = "US/Pacific";
 static const char *bat = "acpibat0";
 static const char *ifnames[] = { "em0", "iwn0" };
+static const char *wifname = "iwn0";
 
 
 static Display *dpy;
@@ -122,6 +123,31 @@ loadavg(void)
 	}
 
 	return smprintf("%.2f %.2f %.2f", avgs[0], avgs[1], avgs[2]);
+}
+
+char *
+network(void)
+{
+	char path[sizeof "/etc/hostname." + IFNAMSIZ];
+	char buf[256];
+	char network[256];
+	int r;
+
+	strlcpy(path, "/etc/hostname.", sizeof path);
+	strlcat(path, wifname, sizeof path);
+	if ((r = readlink(path, buf, sizeof buf - 1)) == -1) {
+		perror("readlink");
+		return smprintf("-");
+	}
+	buf[r] = '\0';
+	strlcpy(path, "hostname.d/", sizeof path);
+	strlcat(path, wifname, sizeof path);
+	strlcat(path, ".%s", sizeof path);
+	if ((r = sscanf(buf, path, network)) != 1) {
+		perror("sscanf");
+		return smprintf("-");
+	}
+	return smprintf("%s", network);
 }
 
 char *
@@ -250,6 +276,7 @@ update_status(void)
 	char *avgs;
 	char *bat;
 	char *addr;
+	char *nw;
 	char *status;
 	char *newstatus;
 	char *tm;
@@ -262,7 +289,8 @@ update_status(void)
 	avgs = loadavg();
 	bat = batstat();
 	addr = ipaddr();
-	status = smprintf("%s B:%s L:%s", addr, bat, avgs);
+	nw = network();
+	status = smprintf("%s %s B:%s L:%s", addr, nw, bat, avgs);
 	for (i = 0; i < sizeof tzs / sizeof *tzs; i++) {
 		tm = mktimes("%H:%M", tzs[i].v);
 		newstatus = smprintf("%s %c:%s", status, tzs[i].c, tm);
@@ -281,6 +309,7 @@ update_status(void)
 	pthread_mutex_unlock(&g_mtx);
 	free(avgs);
 	free(bat);
+	free(nw);
 	free(addr);
 	free(status);
 }
