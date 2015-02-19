@@ -290,7 +290,7 @@ update_status(void)
 	bat = batstat();
 	addr = ipaddr();
 	nw = network();
-	status = smprintf("%s %s B:%s L:%s", addr, nw, bat, avgs);
+	status = smprintf("%s %s B:%s L:%s", nw, addr, bat, avgs);
 	for (i = 0; i < sizeof tzs / sizeof *tzs; i++) {
 		tm = mktimes("%H:%M", tzs[i].v);
 		newstatus = smprintf("%s %c:%s", status, tzs[i].c, tm);
