@@ -31,9 +31,9 @@ struct TzStatus {
 
 static const struct TzStatus tzs[] = {
 	{ .c = 'U', .v = "UTC" },
-	{ .c = 'E', .v = "US/Eastern" },
+	{ .c = 'P', .v = "US/Pacific" },
 };
-static const char *tzmain = "US/Pacific";
+static const char *tzmain = "Canada/Eastern";
 static const char *bat = "acpibat0";
 static const char *ifnames[] = { "em0", "iwn0" };
 static const char *wifname = "iwn0";
